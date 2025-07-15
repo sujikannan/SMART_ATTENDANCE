@@ -20,3 +20,380 @@ r = sr.Recognizer()
 with sr.Microphone() as source:
     audio = r.listen(source)
 pip install streamlit
+
+sample code for face_registration.py(To update)
+import os
+import cv2
+import uuid
+import pickle
+import numpy as np
+import sqlite3
+import time
+from insightface.app import FaceAnalysis
+from insightface.app.common import Face
+from utils.db_utils import insert_employee, initialize_db
+from typing import List, Dict, Any
+
+# Initialize database before starting
+initialize_db()
+
+class FaceRegistrationSystem:
+    def __init__(self):
+        # Initialize face analysis with fallback options
+        self.model = self._initialize_face_model()
+        self.capture_angles = ['center', 'left', 'right']  # For multi-angle capture
+        self.min_face_size = 0.15  # Minimum face height as fraction of frame height
+        self.min_detection_score = 0.7
+        self.embedding_similarity_threshold = 0.7
+        self.verification_threshold = 0.65
+
+    def _initialize_face_model(self):
+        """Initialize the best available face analysis model"""
+        models_to_try = [
+            ('buffalo_l', 'CUDAExecutionProvider'),  # Larger model if GPU available
+            ('antelopev2', 'CPUExecutionProvider'),    # Newer model version
+            ('buffalo_sc', 'CPUExecutionProvider')     # Current setup
+        ]
+
+        for model_name, provider in models_to_try:
+            try:
+                app = FaceAnalysis(name=model_name, providers=[provider])
+                app.prepare(ctx_id=-1)
+                print(f"Successfully initialized model: {model_name} with {provider}")
+                return app
+            except Exception as e:
+                print(f"Failed to initialize {model_name} with {provider}: {str(e)}")
+                continue
+        
+        raise RuntimeError("Could not initialize any face analysis model")
+
+    def preprocess_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Enhance image quality for better face detection"""
+        # Convert to LAB color space and apply CLAHE to L channel
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        lab = cv2.merge((l, a, b))
+        enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+        
+        # Mild Gaussian blur to reduce noise
+        enhanced = cv2.GaussianBlur(enhanced, (3, 3), 0)
+        
+        return enhanced
+
+    def check_lighting_conditions(self, frame: np.ndarray) -> bool:
+        """Verify if lighting conditions are adequate"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        brightness = np.mean(gray)
+        contrast = np.std(gray)
+        
+        if brightness < 50 or brightness > 200:
+            print(f"Suboptimal brightness ({brightness:.1f}). Ideal range: 50-200")
+            return False
+        if contrast < 40:
+            print(f"Low contrast ({contrast:.1f}). Should be >40")
+            return False
+        return True
+
+    def verify_face_quality(self, face: Face, frame: np.ndarray) -> bool:
+        """Check if detected face meets quality standards"""
+        bbox = face.bbox
+        face_height = bbox[3] - bbox[1]
+        
+        # Check face size
+        if face_height < frame.shape[0] * self.min_face_size:
+            print(f"Face too small ({face_height}px). Minimum: {frame.shape[0] * self.min_face_size}px")
+            return False
+        
+        # Check face alignment
+        if abs(face.pose[0]) > 30:  # yaw (left-right tilt)
+            print(f"Excessive yaw angle ({face.pose[0]:.1f} degrees). Keep face straight")
+            return False
+        if abs(face.pose[1]) > 20:  # pitch (up-down tilt)
+            print(f"Excessive pitch angle ({face.pose[1]:.1f} degrees). Keep level")
+            return False
+        
+        # Check detection confidence
+        if face.det_score < self.min_detection_score:
+            print(f"Low detection confidence ({face.det_score:.2f}). Minimum: {self.min_detection_score}")
+            return False
+            
+        return True
+
+    def check_embedding_consistency(self, embeddings: List[np.ndarray]) -> bool:
+        """Verify that all captured embeddings are consistent"""
+        if len(embeddings) < 2:
+            return True
+            
+        # Calculate pairwise similarities
+        similarities = []
+        for i in range(len(embeddings)):
+            for j in range(i+1, len(embeddings)):
+                sim = np.dot(embeddings[i], embeddings[j]) / (
+                    np.linalg.norm(embeddings[i]) * np.linalg.norm(embeddings[j]))
+                similarities.append(sim)
+        
+        avg_sim = np.mean(similarities)
+        min_sim = np.min(similarities)
+        print(f"Embedding consistency - Avg: {avg_sim:.3f}, Min: {min_sim:.3f}")
+        
+        return avg_sim > self.embedding_similarity_threshold and min_sim > (self.embedding_similarity_threshold - 0.1)
+
+    def capture_images(self, emp_id: str, name: str, role: str, team: str) -> Dict[str, Any]:
+        """Capture and validate multiple face images"""
+        cap = cv2.VideoCapture(0)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        if not cap.isOpened():
+            raise RuntimeError("Failed to open camera")
+
+        os.makedirs(f"images/{emp_id}", exist_ok=True)
+        os.makedirs("embeddings", exist_ok=True)
+
+        accepted_images = []
+        embeddings_data = []
+        count = 0
+
+        print("\nStarting face capture process...")
+        print("Please ensure:")
+        print("- Good lighting (not too dark/bright)")
+        print("- Face is clearly visible")
+        print("- Neutral expression")
+
+        while count < len(self.capture_angles):
+            angle = self.capture_angles[count]
+            print(f"\nCapture {count+1}/{len(self.capture_angles)}: Look {angle}")
+
+            # Countdown timer
+            for i in range(3, 0, -1):
+                ret, frame = cap.read()
+                if not ret:
+                    continue
+                
+                display = frame.copy()
+                cv2.putText(display, f"Capturing in {i}...", (20, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                cv2.imshow("Camera", display)
+                cv2.waitKey(1000)
+
+            # Capture frame
+            ret, frame = cap.read()
+            if not ret:
+                print("Frame capture failed. Retrying...")
+                continue
+
+            # Preprocess and detect faces
+            processed = self.preprocess_frame(frame)
+            
+            if not self.check_lighting_conditions(processed):
+                print("Lighting conditions not optimal. Please adjust lighting.")
+                continue
+
+            faces = self.model.get(processed)
+            faces = [f for f in faces if self.verify_face_quality(f, processed)]
+
+            if not faces:
+                print("No valid face detected. Please ensure:")
+                print("- Your face is clearly visible")
+                print("- You're looking approximately " + angle)
+                continue
+
+            # Get the largest face (if multiple detected)
+            face = max(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]))
+            emb = face['embedding']
+
+            # Show preview and get user confirmation
+            preview = processed.copy()
+            bbox = face.bbox.astype(int)
+            cv2.rectangle(preview, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
+            cv2.putText(preview, f"Image {count+1}: Press 'y' to accept", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.imshow("Camera", preview)
+            
+            print("Press 'y' to accept image, any other key to retry")
+            key = cv2.waitKey(5000) & 0xFF
+
+            if key == ord('y'):
+                img_path = f"images/{emp_id}/{uuid.uuid4().hex}.jpg"
+                cv2.imwrite(img_path, frame)
+                accepted_images.append(img_path)
+                embeddings_data.append({
+                    'id': emp_id,
+                    'name': name,
+                    'role': role,
+                    'team': team,
+                    'embedding': emb,
+                    'image_path': img_path,
+                    'capture_time': time.time()
+                })
+                print(f"Accepted {angle} view")
+                count += 1
+            else:
+                print("Retaking this capture...")
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+        return {
+            'accepted_images': accepted_images,
+            'embeddings_data': embeddings_data,
+            'employee_info': {
+                'emp_id': emp_id,
+                'name': name,
+                'role': role,
+                'team': team
+            }
+        }
+
+    def verify_registration(self, embeddings: List[np.ndarray]) -> bool:
+        """Verify the registration with a fresh capture"""
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            print("Could not open camera for verification")
+            return False
+
+        print("\nVerification step: Please look straight at the camera")
+        
+        # Capture verification image
+        for i in range(3, 0, -1):
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            
+            display = frame.copy()
+            cv2.putText(display, f"Verification in {i}...", (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+            cv2.imshow("Verification", display)
+            cv2.waitKey(1000)
+
+        ret, frame = cap.read()
+        cap.release()
+        cv2.destroyAllWindows()
+
+        if not ret:
+            print("Failed to capture verification image")
+            return False
+
+        # Process verification image
+        processed = self.preprocess_frame(frame)
+        faces = self.model.get(processed)
+        faces = [f for f in faces if self.verify_face_quality(f, processed)]
+
+        if not faces:
+            print("No valid face detected during verification")
+            return False
+
+        # Compare with registered embeddings
+        live_embedding = max(faces, key=lambda f: f.det_score)['embedding']
+        similarities = [np.dot(le, live_embedding) / (
+            np.linalg.norm(le) * np.linalg.norm(live_embedding)) 
+            for le in embeddings]
+        
+        avg_sim = np.mean(similarities)
+        min_sim = np.min(similarities)
+        print(f"Verification similarity - Avg: {avg_sim:.3f}, Min: {min_sim:.3f}")
+
+        return avg_sim > self.verification_threshold and min_sim > (self.verification_threshold - 0.15)
+
+    def save_registration_data(self, data: Dict[str, Any]) -> bool:
+        """Save all registration data to disk"""
+        emp_id = data['employee_info']['emp_id']
+        
+        # Save embeddings
+        if os.path.exists("embeddings/embeddings.pkl"):
+            with open("embeddings/embeddings.pkl", "rb") as f:
+                db = pickle.load(f)
+        else:
+            db = []
+
+        # Check if employee already exists
+        existing_idx = next((i for i, e in enumerate(db) if e['id'] == emp_id), None)
+        if existing_idx is not None:
+            print(f"Updating existing registration for {emp_id}")
+            db[existing_idx] = data['embeddings_data'][0]  # Keep just one embedding for existing
+        else:
+            db.extend(data['embeddings_data'])
+
+        with open("embeddings/embeddings.pkl", "wb") as f:
+            pickle.dump(db, f)
+
+        # Save to database
+        insert_employee(
+            emp_id=data['employee_info']['emp_id'],
+            name=data['employee_info']['name'],
+            role=data['employee_info']['role'],
+            team=data['employee_info']['team'],
+            image_path=data['embeddings_data'][0]['image_path']
+        )
+
+        return True
+
+    def preview_accepted_images(self, image_paths: List[str]):
+        """Show preview of all accepted images"""
+        print("\nPreview of registered images:")
+        for i, path in enumerate(image_paths):
+            img = cv2.imread(path)
+            if img is not None:
+                cv2.imshow(f"Registered Image {i+1}", img)
+                key = cv2.waitKey(2000)
+                cv2.destroyAllWindows()
+                if key == ord('q'):
+                    break
+
+    def run_registration(self):
+        """Main registration workflow"""
+        print("\n" + "="*50)
+        print("Employee Face Registration System")
+        print("="*50 + "\n")
+
+        # Get employee information
+        emp_id = input("Enter Employee ID: ").strip()
+        name = input("Enter Full Name: ").strip()
+        role = input("Enter Role: ").strip()
+        team = input("Enter Team Name: ").strip()
+
+        # Capture images
+        try:
+            capture_result = self.capture_images(emp_id, name, role, team)
+        except Exception as e:
+            print(f"Registration failed: {str(e)}")
+            return
+
+        # Verify embedding consistency
+        embeddings = [e['embedding'] for e in capture_result['embeddings_data']]
+        if not self.check_embedding_consistency(embeddings):
+            print("\nWARNING: Face images are inconsistent!")
+            print("Possible reasons:")
+            print("- Different people in images")
+            print("- Extreme pose variations")
+            print("- Poor image quality")
+            print("\nPlease try registration again")
+            return
+
+        # Verify registration with fresh capture
+        if not self.verify_registration(embeddings):
+            print("\nWARNING: Verification failed!")
+            print("Possible reasons:")
+            print("- Different person from registration")
+            print("- Poor image quality")
+            print("- Changed appearance (glasses, heavy makeup)")
+            print("\nPlease try registration again")
+            return
+
+        # Save data
+        self.save_registration_data(capture_result)
+        self.preview_accepted_images(capture_result['accepted_images'])
+
+        print("\n" + "="*50)
+        print(f"SUCCESS: {name} registered successfully!")
+        print(f"Employee ID: {emp_id}")
+        print(f"Role: {role}")
+        print(f"Team: {team}")
+        print(f"Registered {len(capture_result['accepted_images'])} images")
+        print("="*50)
+
+if __name__ == "__main__":
+    system = FaceRegistrationSystem()
+    system.run_registration()
