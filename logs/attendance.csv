@@ -1,0 +1,4 @@
+Date,Employee ID,Name,Status,Entry Time,Exit Time,Late
+2025-07-15,EM0001,SUJI S,Present,10:13 AM,,Yes
+2025-07-15,EM0001,SUJI S,Present,,10:14 AM,
+2025-07-15,EM0001,SUJI S,Present,,10:17 AM,

@@ -1,0 +1,22 @@
+please install all the module in your virtual or environment to run the project
+pip install onnxruntime==1.15.1 insightface==0.7.3 opencv-python numpy
+python -m pip install --upgrade pip setuptools wheel
+pip install insightface --no-build-isolation --only-binary=:all:
+ If that fails, try installing from a pre-compiled wheel:
+pip install insightface --pre --extra-index-url https://pypi.insightface.ai/simple/
+pip install numpy opencv-python onnxruntime
+pip install insightface
+pip install pyttsx3
+If you re using Python 3.10 or later, you might need to install the development version:
+pip install pyttsx3==2.90
+Alternative Solutions:
+If you continue to have issues with pyttsx3, consider these alternatives:
+Use gTTS (Google Text-to-Speech):
+pip install gtts
+pip install SpeechRecognition
+pip install pyaudio
+# Uses the default system microphone without PyAudio
+r = sr.Recognizer()
+with sr.Microphone() as source:
+    audio = r.listen(source)
+pip install streamlit
