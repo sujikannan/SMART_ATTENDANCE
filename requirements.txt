@@ -21,7 +21,8 @@ with sr.Microphone() as source:
     audio = r.listen(source)
 pip install streamlit
 
-sample code for face_registration.py(To update)
+yesterday file sample code for face_registration.py(To update)
+is updated
 import os
 import cv2
 import uuid
