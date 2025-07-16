@@ -19,7 +19,7 @@ def initialize_db():
     )
     ''')
     
-    # Attendance table
+    # Attendance table with updated break times
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS attendance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,46 +68,55 @@ def record_attendance(emp_id, entry_time=None, exit_time=None, status=None,
     
     # Check if record exists for today
     cursor.execute('''
-    SELECT id FROM attendance 
+    SELECT id, exit_time FROM attendance 
     WHERE emp_id = ? AND date = ?
     ''', (emp_id, today))
     record = cursor.fetchone()
     
     if record:
-        # Update existing record
-        attendance_id = record[0]
-        updates = []
-        params = []
-        
-        if entry_time:
-            updates.append("entry_time = ?")
-            params.append(entry_time)
-        if exit_time:
-            updates.append("exit_time = ?")
-            params.append(exit_time)
-        if status:
-            updates.append("status = ?")
-            params.append(status)
-        if break_start:
-            updates.append("break_start = ?")
-            params.append(break_start)
-        if break_end:
-            updates.append("break_end = ?")
-            params.append(break_end)
-        if lunch_start:
-            updates.append("lunch_start = ?")
-            params.append(lunch_start)
-        if lunch_end:
-            updates.append("lunch_end = ?")
-            params.append(lunch_end)
-        if permission_reason:
-            updates.append("permission_reason = ?")
-            params.append(permission_reason)
+        attendance_id, existing_exit_time = record
+        # If this is a re-entry after exit (after 8 PM), update exit_time
+        if exit_time and existing_exit_time:
+            current_hour = datetime.now().hour
+            if current_hour >= 20:  # After 8 PM
+                cursor.execute('''
+                UPDATE attendance SET exit_time = ?
+                WHERE id = ?
+                ''', (exit_time, attendance_id))
+        else:
+            # Normal update
+            updates = []
+            params = []
             
-        if updates:
-            query = f"UPDATE attendance SET {', '.join(updates)} WHERE id = ?"
-            params.append(attendance_id)
-            cursor.execute(query, params)
+            if entry_time:
+                updates.append("entry_time = ?")
+                params.append(entry_time)
+            if exit_time:
+                updates.append("exit_time = ?")
+                params.append(exit_time)
+            if status:
+                updates.append("status = ?")
+                params.append(status)
+            if break_start:
+                updates.append("break_start = ?")
+                params.append(break_start)
+            if break_end:
+                updates.append("break_end = ?")
+                params.append(break_end)
+            if lunch_start:
+                updates.append("lunch_start = ?")
+                params.append(lunch_start)
+            if lunch_end:
+                updates.append("lunch_end = ?")
+                params.append(lunch_end)
+            if permission_reason:
+                updates.append("permission_reason = ?")
+                params.append(permission_reason)
+                
+            if updates:
+                query = f"UPDATE attendance SET {', '.join(updates)} WHERE id = ?"
+                params.append(attendance_id)
+                cursor.execute(query, params)
     else:
         # Create new record
         cursor.execute('''
@@ -164,3 +173,21 @@ def get_today_attendance():
     attendance = cursor.fetchall()
     conn.close()
     return attendance
+
+def update_attendance_record(record_id, updates):
+    conn = sqlite3.connect('database/attendance.db')
+    cursor = conn.cursor()
+    
+    set_clause = ', '.join([f"{key} = ?" for key in updates.keys()])
+    values = list(updates.values())
+    values.append(record_id)
+    
+    cursor.execute(f'''
+    UPDATE attendance 
+    SET {set_clause}
+    WHERE id = ?
+    ''', values)
+    
+    conn.commit()
+    conn.close()
+    return cursor.rowcount > 0

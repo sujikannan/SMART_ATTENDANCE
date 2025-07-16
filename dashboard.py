@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import hashlib
 import os
+from utils.db_utils import update_attendance_record
 
 # Database setup
 def init_db():
@@ -300,7 +301,7 @@ def dashboard_page():
 def attendance_page():
     st.subheader("Attendance Management")
     
-    tab1, tab2 = st.tabs(["Mark Attendance", "View Attendance"])
+    tab1, tab2, tab3 = st.tabs(["Mark Attendance", "View Attendance", "Modify Attendance"])
     
     with tab1:
         emp_id = st.text_input("Employee ID")
@@ -343,6 +344,7 @@ def attendance_page():
                 lunch_late=lunch_late
             )
             st.success("Attendance recorded successfully")
+        pass
     
     with tab2:
         end_date = datetime.now().date()
@@ -381,6 +383,64 @@ def attendance_page():
             )
         else:
             st.warning("No attendance records found for selected period")
+        pass
+
+    with tab3:
+        st.subheader("Modify Attendance Records")
+        
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=30)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("Start Date", start_date)
+        with col2:
+            end_date = st.date_input("End Date", end_date)
+        
+        attendance_df = get_attendance(start_date, end_date)
+        if not attendance_df.empty:
+            st.dataframe(attendance_df)
+            
+            st.subheader("Modify Record")
+            record_id = st.number_input("Record ID to modify", min_value=1)
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                new_entry = st.time_input("New Entry Time")
+                new_exit = st.time_input("New Exit Time")
+                new_status = st.selectbox("New Status", ["present", "late", "leave", "half-day"])
+            
+            with col2:
+                new_break_in = st.time_input("New Break In Time")
+                new_break_out = st.time_input("New Break Out Time")
+                new_lunch_in = st.time_input("New Lunch In Time")
+                new_lunch_out = st.time_input("New Lunch Out Time")
+            
+            new_reason = st.text_area("New Permission Reason")
+            
+            if st.button("Update Record"):
+                updates = {
+                    'entry_time': new_entry.strftime("%H:%M:%S") if new_entry else None,
+                    'exit_time': new_exit.strftime("%H:%M:%S") if new_exit else None,
+                    'status': new_status,
+                    'break_in': new_break_in.strftime("%H:%M:%S") if new_break_in else None,
+                    'break_out': new_break_out.strftime("%H:%M:%S") if new_break_out else None,
+                    'lunch_in': new_lunch_in.strftime("%H:%M:%S") if new_lunch_in else None,
+                    'lunch_out': new_lunch_out.strftime("%H:%M:%S") if new_lunch_out else None,
+                    'permission_reason': new_reason if new_reason else None
+                }
+                
+                # Remove None values
+                updates = {k: v for k, v in updates.items() if v is not None}
+                
+                if updates:
+                    success = update_attendance_record(record_id, updates)
+                    if success:
+                        st.success("Record updated successfully!")
+                    else:
+                        st.error("Failed to update record. Check if ID exists.")
+                else:
+                    st.warning("No changes specified")
 
 def employees_page():
     st.subheader("Employee Management")

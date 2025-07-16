@@ -9,15 +9,25 @@ from insightface.app import FaceAnalysis
 from scipy.spatial.distance import cosine
 from utils.db_3utils import log_attendance, log_permission
 
-app = FaceAnalysis(name='buffalo_sc', providers=['CPUExecutionProvider'])
-app.prepare(ctx_id=0)
+app = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider'])
+app.prepare(ctx_id=-1)
 
 with open("embeddings/embeddings.pkl", "rb") as f:
     known_faces = pickle.load(f)
-
+# day1
 engine = pyttsx3.init()
 recognizer = sr.Recognizer()
 seen_ids = {}
+
+def preprocess_image(frame):
+    # Convert to grayscale
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # Apply histogram equalization
+    gray = cv2.equalizeHist(gray)
+    # Apply bilateral filter for noise reduction while preserving edges
+    filtered = cv2.bilateralFilter(gray, 9, 75, 75)
+    # Convert back to color for display
+    return cv2.cvtColor(filtered, cv2.COLOR_GRAY2BGR)
 
 def say(text):
     engine.say(text)
@@ -35,13 +45,12 @@ def capture_audio_reason():
         except:
             return "Could not understand"
 
-def is_reason_time(hour, minute):
-    
-    return (hour == 8 and minute >= 10) or (8 <= hour < 0)
-
 def is_break_time(hour, minute):
-    is_morning_break=(hour == 10 and 30 <= minute <= 40) # 10:30 PM to 10:40 PM
-    is_evening_break= (hour == 16 and 30 <= minute <= 40)  # 4:30 PM to 4:40 PM
+    # Morning break: 10:30 AM to 11:00 AM (10 minutes max)
+    is_morning_break = (hour == 10 and 30 <= minute <= 59)
+    # Evening break: 4:30 PM to 5:00 PM (10 minutes max)
+    is_evening_break = (hour == 16 and 30 <= minute <= 59)
+    return is_morning_break or is_evening_break
 
 def recognize_entry():
     cap = cv2.VideoCapture(0)
@@ -52,7 +61,10 @@ def recognize_entry():
         if not ret or frame is None:
             break
 
-        faces = app.get(frame)
+        # Preprocess the frame
+        processed_frame = preprocess_image(frame)
+        
+        faces = app.get(processed_frame)
 
         for face in faces:
             emb = face['embedding']
@@ -78,15 +90,16 @@ def recognize_entry():
 
                         log_attendance(emp_id, name, status, time_str, "", late)
 
-                    
-                    if is_reason_time(hour, minute) and not is_break_time(hour, minute) and emp_id not in permission_logged:
+                    # Check for break time
+                    if is_break_time(hour, minute) and emp_id not in permission_logged:
                         cv2.rectangle(frame, (x1, y2 + 10), (x1 + 200, y2 + 50), (50, 200, 255), -1)
-                        cv2.putText(frame, "Press R for Reason", (x1 + 5, y2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+                        cv2.putText(frame, "Press R for Break", (x1 + 5, y2 + 40), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
 
                         if cv2.waitKey(1) & 0xFF == ord('r'):
-                            reason = capture_audio_reason()
-                            say("Permission recorded.")
-                            log_permission(emp_id, name, reason, time_str)
+                            reason = "Break time"
+                            say("Break recorded.")
+                            log_permission(emp_id, name, "Break", reason, time_str)
                             permission_logged.add(emp_id)
 
                     # Display overlay and bounding box

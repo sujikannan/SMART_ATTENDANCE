@@ -40,7 +40,7 @@ def capture_and_register():
     embeddings_data = []
 
     count = 0
-    while count < 3:
+    while count < 10:
         print(f"Preparing to capture image {count + 1}. Look at the camera.")
 
         start_time = time.time()
@@ -80,14 +80,14 @@ def capture_and_register():
 
             if key == ord('y'):
                 img_path = f"images/{emp_id}/{uuid.uuid4().hex}.jpg"
-                # img = PIL.Image.open(img_path)
+                
                 cv2.imwrite(img_path, frame)
                 accepted_images.append(img_path)
                 embeddings_data.append({
                     'id': emp_id,
                     'name': name,
                     'role': role,
-                    'team': team,  # Added team to embeddings
+                    'team': team, 
                     'embedding': emb,
                     'profile_image':preview
                 })
@@ -112,22 +112,19 @@ def capture_and_register():
 
         insert_employee(emp_id, name, role, team, accepted_images[0])  # Updated to include team
         print(f"{name} registered successfully with {len(accepted_images)} confirmed images.")
-
         print("Previewing accepted images...")
         for i, img_path in enumerate(accepted_images):
             img = cv2.imread(img_path)
             if img is not None:
                 cv2.imshow(f"Accepted Image {i+1}", img)
-                key = cv2.waitKey(2000)  # Show each image for 2 seconds
+                key = cv2.waitKey(2000) 
                 cv2.destroyWindow(f"Accepted Image {i+1}")
                 if key == ord('q'):
                     print("Preview skipped by user.")
                     break
     else:
         print("No confirmed images. Registration aborted.")
-
     cap.release()
     cv2.destroyAllWindows()
-
 if __name__ == "__main__":
     capture_and_register()
