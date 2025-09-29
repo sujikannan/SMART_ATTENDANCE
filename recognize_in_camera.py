@@ -9,8 +9,8 @@ from insightface.app import FaceAnalysis
 from scipy.spatial.distance import cosine
 from utils.db_3utils import log_attendance, log_permission
 
-app = FaceAnalysis(name='buffalo_s', providers=['CPUExecutionProvider'])
-app.prepare(ctx_id=-1)
+app = FaceAnalysis(name='buffalo_s', providers=['CUDAExecutionProvider'])
+app.prepare(ctx_id=0)
 
 with open("embeddings/embeddings.pkl", "rb") as f:
     known_faces = pickle.load(f)
